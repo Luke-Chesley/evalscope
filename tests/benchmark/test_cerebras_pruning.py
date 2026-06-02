@@ -2,18 +2,16 @@ from typing import Any
 
 from evalscope.api.dataset import DatasetDict, MemoryDataset, Sample
 from evalscope.api.dataset.pruning import (
+    BENCHMARK_SPECS,
     apply_coreset_pruning,
     apply_coreset_pruning_by_ratio,
     apply_index_subset,
-    parse_index_list,
-    select_diverse_samples,
-)
-from evalscope.api.dataset.calibrated_pruning import (
-    BENCHMARK_SPECS,
     build_calibrated_features,
     build_selection_vectors,
+    parse_index_list,
     prepare_calibrated_strata,
     resolve_prune_k,
+    select_diverse_samples,
 )
 from evalscope.api.messages import ChatMessageUser
 from evalscope.benchmarks.aa_lcr.aa_lcr_adapter import aa_lcr_feature_builder
