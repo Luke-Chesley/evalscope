@@ -1,5 +1,7 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 # flake8: noqa: E501
+import hashlib
+import math
 import re
 import urllib.request
 import zipfile
@@ -12,6 +14,10 @@ from evalscope.api.evaluator import TaskState
 from evalscope.api.messages import ChatMessageUser
 from evalscope.api.metric import Score
 from evalscope.api.registry import register_benchmark
+from evalscope.api.dataset.pruning import (
+    PRUNING_EXTRA_PARAMS,
+    PrunedBenchmarkMixin,
+)
 from evalscope.constants import DEFAULT_EVALSCOPE_CACHE_DIR, Tags
 from evalscope.utils.logger import get_logger
 
@@ -49,6 +55,28 @@ DOWNLOAD_URL: str = (
 DEFAULT_CACHE_SUBDIR: str = 'aa_lcr'
 DEFAULT_ZIP_NAME: str = 'AA-LCR_extracted-text.zip'
 DEFAULT_EXTRACTED_DIR_NAME: str = 'lcr'
+
+
+def aa_lcr_feature_builder(sample: Sample) -> Dict[str, Any]:
+    """Build AA-LCR pruning features from prompt metadata."""
+    metadata = sample.metadata or {}
+    domain = metadata.get('document_category') or 'unknown'
+    input_tokens = float(metadata.get('input_tokens') or 0)
+    question = str(metadata.get('question') or '')
+    buckets = [0.0] * 32
+    for token in re.findall(r'[A-Za-z_][A-Za-z_0-9]+|\d+', question.lower()):
+        digest = hashlib.md5(token.encode('utf-8')).digest()
+        bucket = digest[0] % len(buckets)
+        sign = 1.0 if digest[1] % 2 == 0 else -1.0
+        buckets[bucket] += sign
+    norm = math.sqrt(sum(value * value for value in buckets)) or 1.0
+    return {
+        'stratum': domain,
+        'vector': [
+            math.log1p(max(input_tokens, 0.0)),
+            *[value / norm for value in buckets],
+        ],
+    }
 
 
 @register_benchmark(
@@ -197,6 +225,8 @@ class AALCRAdapter(DefaultDataAdapter):
             target=record['answer'],
             metadata={
                 'question': record['question'],
+                'document_category': record.get('document_category'),
+                'document_set_id': record.get('document_set_id'),
                 'data_source_urls': record['data_source_urls'],
                 'input_tokens': record.get('input_tokens', 0),
             }
@@ -235,3 +265,52 @@ class AALCRAdapter(DefaultDataAdapter):
         }
         score.main_score_name = 'acc'
         return score
+
+
+@register_benchmark(
+    BenchmarkMeta(
+        name='aa_lcr_pruned',
+        pretty_name='AA-LCR Pruned',
+        tags=[Tags.KNOWLEDGE, Tags.REASONING, Tags.LONG_CONTEXT],
+        description="""
+## Overview
+
+Pruned AA-LCR adapter for Cerebras Task 2 benchmark compression.
+
+This adapter runs the same task and scoring path as `aa_lcr`, then applies a reusable pruning layer after normal
+dataset loading. It supports metadata-only coreset selection and calibrated selection from raw prediction/review
+artifacts through `pruning_strategy`, `prune_ratio`, `prune_k`, and `calibration_dir`.
+""",
+        dataset_id='evalscope/AA-LCR',
+        metric_list=['acc'],
+        few_shot_num=0,
+        train_split=None,
+        eval_split='test',
+        prompt_template=PROMPT_TEMPLATE,
+        extra_params={
+            'text_dir': {
+                'type': 'str | null',
+                'description': (
+                    'Local directory containing extracted AA-LCR text files; if null will auto-download and extract.'
+                ),
+                'value': None
+            },
+            **PRUNING_EXTRA_PARAMS,
+        }
+    )
+)
+class AALCRPrunedAdapter(PrunedBenchmarkMixin, AALCRAdapter):
+    """AA-LCR adapter registered as a pruned benchmark."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._init_pruning()
+
+    def load(self):
+        return self._load_pruned_dataset()
+
+    def pruning_feature_builder(self, sample: Sample) -> Dict[str, Any]:
+        return aa_lcr_feature_builder(sample)
+
+    def calibrated_subset_indices(self, dataset_dict) -> list[int]:
+        return self._calibrated_backend_indices('aa_lcr', dataset_dict)

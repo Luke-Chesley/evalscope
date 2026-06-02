@@ -1,8 +1,12 @@
 # flake8: noqa: E501
+import hashlib
+import math
+import re
 from typing import Any, Dict
 
 from evalscope.api.benchmark import BenchmarkMeta, DefaultDataAdapter
 from evalscope.api.dataset import Sample
+from evalscope.api.dataset.pruning import PRUNING_EXTRA_PARAMS, PrunedBenchmarkMixin
 from evalscope.api.evaluator import TaskState
 from evalscope.api.messages.chat_message import ChatMessageUser
 from evalscope.api.metric import Score
@@ -12,6 +16,59 @@ from evalscope.utils.io_utils import convert_normal_types
 from evalscope.utils.logger import get_logger
 
 logger = get_logger()
+
+
+def live_code_bench_feature_builder(sample: Sample) -> Dict[str, Any]:
+    """Build LiveCodeBench pruning features from problem text."""
+    metadata = sample.metadata or {}
+    question = str(metadata.get('question_content') or '')
+    lower = question.lower()
+    difficulty = _infer_lcb_difficulty(lower)
+    keyword_vec = _lcb_keyword_vector(lower)
+    return {
+        'stratum': difficulty,
+        'vector': [
+            math.log1p(len(question)),
+            math.log1p(max(1, len(re.findall(r'\S+', question)))),
+            math.log1p(question.count('\n') + 1),
+            *keyword_vec,
+            *_hashed_question_vector(question, dimensions=48),
+        ],
+    }
+
+
+def _infer_lcb_difficulty(lower: str) -> str:
+    if re.search(r'\b(10\^5|10\*\*5|1e5|dynamic programming|bitmask|segment tree|dijkstra)\b', lower):
+        return 'hard'
+    if re.search(r'\b(graph|tree|binary search|greedy|sort|heap|deque|dfs|bfs)\b', lower):
+        return 'medium'
+    return 'easy'
+
+
+def _lcb_keyword_vector(lower: str) -> list[float]:
+    groups = [
+        ['graph', 'tree', 'edge', 'node', 'dfs', 'bfs'],
+        ['dynamic programming', 'dp', 'memo'],
+        ['binary search', 'search'],
+        ['greedy', 'sort', 'sorted'],
+        ['math', 'prime', 'modulo', 'gcd', 'combin'],
+        ['bitmask', 'bitwise', 'xor'],
+        ['string', 'substring', 'palindrome'],
+        ['stack', 'queue', 'heap', 'deque', 'map', 'set'],
+    ]
+    return [1.0 if any(keyword in lower for keyword in group) else 0.0 for group in groups]
+
+
+def _hashed_question_vector(text: str, dimensions: int) -> list[float]:
+    buckets = [0.0] * dimensions
+    tokens = re.findall(r'[A-Za-z_][A-Za-z_0-9]+|\d+', text.lower())
+    for token in tokens:
+        digest = hashlib.md5(token.encode('utf-8')).digest()
+        bucket = digest[0] % dimensions
+        sign = 1.0 if digest[1] % 2 == 0 else -1.0
+        buckets[bucket] += sign
+    norm = math.sqrt(sum(value * value for value in buckets)) or 1.0
+    return [value / norm for value in buckets]
 
 
 @register_benchmark(
@@ -139,7 +196,8 @@ class LiveCodeBenchAdapter(DefaultDataAdapter):
             target='',
             metadata={
                 'evaluation_sample': record['evaluation_sample'],
-                'contest_date': record['contest_date']
+                'contest_date': record['contest_date'],
+                'question_content': question_content,
             }
         )
 
@@ -222,3 +280,69 @@ class LiveCodeBenchAdapter(DefaultDataAdapter):
 
         score.main_score_name = 'acc'
         return score
+
+
+@register_benchmark(
+    BenchmarkMeta(
+        name='live_code_bench_pruned',
+        pretty_name='Live-Code-Bench Pruned',
+        tags=[Tags.CODING],
+        description="""
+## Overview
+
+Pruned LiveCodeBench adapter for Cerebras Task 2 benchmark compression.
+
+This adapter runs the same task and sandbox scoring path as `live_code_bench`, then applies a reusable pruning layer
+after normal dataset loading and date filtering. It supports metadata-only coreset selection and calibrated
+selection from raw prediction/review artifacts.
+""",
+        dataset_id='evalscope/livecodebench_code_generation_lite_parquet',
+        subset_list=['v5'],
+        metric_list=['acc'],
+        aggregation='mean_and_pass_at_k',
+        eval_split='test',
+        prompt_template=
+        '### Question:\n{question_content}\n\n{format_prompt} ### Answer: (use the provided format with backticks)\n\n',
+        review_timeout=6,
+        extra_params={
+            'start_date': {
+                'type': 'str | null',
+                'description': 'Filter problems starting from this date (YYYY-MM-DD). Null keeps all.',
+                'value': None
+            },
+            'end_date': {
+                'type': 'str | null',
+                'description': 'Filter problems up to this date (YYYY-MM-DD). Null keeps all.',
+                'value': None
+            },
+            'debug': {
+                'type': 'bool',
+                'description': 'Enable verbose debug logging and bypass certain safety checks.',
+                'value': False
+            },
+            **PRUNING_EXTRA_PARAMS,
+        },
+        sandbox_config={
+            'image': 'python:3.11-slim',
+            'tools_config': {
+                'shell_executor': {},
+                'python_executor': {}
+            }
+        },
+    )
+)
+class LiveCodeBenchPrunedAdapter(PrunedBenchmarkMixin, LiveCodeBenchAdapter):
+    """LiveCodeBench adapter registered as a pruned benchmark."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._init_pruning()
+
+    def load(self):
+        return self._load_pruned_dataset()
+
+    def pruning_feature_builder(self, sample: Sample) -> Dict[str, Any]:
+        return live_code_bench_feature_builder(sample)
+
+    def calibrated_subset_indices(self, dataset_dict) -> list[int]:
+        return self._calibrated_backend_indices('live_code_bench', dataset_dict)
