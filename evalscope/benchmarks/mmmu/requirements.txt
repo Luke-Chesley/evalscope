@@ -1,3 +1,4 @@
 pytesseract
 scikit-learn
 torch
+transformers
