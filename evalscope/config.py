@@ -360,6 +360,17 @@ class TaskConfig(BaseArgument):
             'embedding_text_mode',
             'available_id_policy',
             'calibration_artifact_name',
+            'candidate_pool_size',
+            'run_ocr',
+            'use_clip',
+            'clip_model',
+            'tesseract_cmd',
+            'stress_weight',
+            'diversity_weight',
+            'coverage_weight',
+            'save_pruning_report',
+            'pruning_output_dir',
+            'include_html_preview',
         }
         if not self.dataset_args or not pruning_keys.intersection(self.dataset_args):
             return
