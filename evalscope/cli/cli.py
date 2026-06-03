@@ -4,6 +4,7 @@ import argparse
 
 from evalscope import __version__
 from evalscope.cli.benchmark_info import BenchmarkInfoCMD
+from evalscope.cli.inspect_dataset import DatasetCMD
 from evalscope.cli.start_app import StartAppCMD
 from evalscope.cli.start_eval import EvalCMD
 from evalscope.cli.start_perf import PerfBenchCMD
@@ -20,6 +21,7 @@ def run_cmd():
     StartAppCMD.define_args(subparsers)
     ServiceCMD.define_args(subparsers)
     BenchmarkInfoCMD.define_args(subparsers)
+    DatasetCMD.define_args(subparsers)
 
     args = parser.parse_args()
 

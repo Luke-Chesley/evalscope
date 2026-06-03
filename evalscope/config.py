@@ -329,6 +329,7 @@ class TaskConfig(BaseArgument):
         self._init_default_generation_config()
         self._init_default_model_args()
         self._init_default_sandbox_config()
+        self._init_pruning_dataset_args()
 
         # Handle deprecated judge_worker_num -> eval_batch_size
         if self.judge_worker_num is not None:
@@ -338,6 +339,50 @@ class TaskConfig(BaseArgument):
             )
 
         return self
+
+    def _init_pruning_dataset_args(self):
+        """Normalize unkeyed pruned-benchmark args from the Task 2 run contract."""
+        pruning_keys = {
+            'pruning_strategy',
+            'prune_ratio',
+            'prune_k',
+            'subset_indices',
+            'calibration_dir',
+            'calibration_embedding_model',
+            'calibration_stratum',
+            'score_weight',
+            'discrimination_weight',
+            'structure_weight',
+            'semantic_weight',
+            'keyword_weight',
+            'random_state',
+            'use_embeddings',
+            'embedding_text_mode',
+            'available_id_policy',
+            'calibration_artifact_name',
+            'candidate_pool_size',
+            'run_ocr',
+            'use_clip',
+            'clip_model',
+            'tesseract_cmd',
+            'stress_weight',
+            'diversity_weight',
+            'coverage_weight',
+            'save_pruning_report',
+            'pruning_output_dir',
+            'include_html_preview',
+        }
+        if not self.dataset_args or not pruning_keys.intersection(self.dataset_args):
+            return
+        if len(self.datasets) != 1:
+            raise ValueError('Unkeyed pruning dataset_args are only supported when exactly one dataset is selected.')
+
+        dataset_name = self.datasets[0]
+        self.dataset_args = {
+            dataset_name: {
+                'extra_params': self.dataset_args,
+            }
+        }
 
     def _init_model_and_id(self):
         # Set model to DummyCustomModel if not provided

@@ -62,6 +62,7 @@ omnidoc_bench    = {file = ["evalscope/benchmarks/omnidoc_bench/requirements.txt
 ifeval           = {file = ["evalscope/benchmarks/ifeval/requirements.txt"]}
 ifbench          = {file = ["evalscope/benchmarks/ifbench/requirements.txt"]}
 multi_if         = {file = ["evalscope/benchmarks/multi_if/requirements.txt"]}
+mmmu_visual_pruning = {file = ["evalscope/benchmarks/mmmu/requirements.txt"]}
 olympiad_bench   = {file = ["evalscope/benchmarks/olympiad_bench/requirements.txt"]}
 needle_haystack  = {file = ["evalscope/benchmarks/needle_haystack/requirements.txt"]}
 openai_mrcr      = {file = ["evalscope/benchmarks/openai_mrcr/requirements.txt"]}

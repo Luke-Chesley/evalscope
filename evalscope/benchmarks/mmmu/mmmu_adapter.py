@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from evalscope.api.benchmark import BenchmarkMeta, VisionLanguageAdapter
 from evalscope.api.dataset import Sample
+from evalscope.api.dataset.pruning import PRUNING_EXTRA_PARAMS, PrunedBenchmarkMixin
 from evalscope.api.evaluator import TaskState
 from evalscope.api.messages import ChatMessageUser, Content
 from evalscope.api.registry import register_benchmark
@@ -11,6 +12,8 @@ from evalscope.constants import Tags
 from evalscope.utils.io_utils import bytes_to_base64
 from evalscope.utils.logger import get_logger
 from evalscope.utils.multi_choices import MultipleChoiceTemplate, parse_answers, prompt
+
+from .visual_pruning import MMMU_VISUAL_PRUNING_EXTRA_PARAMS, apply_mmmu_visual_pruning
 
 logger = get_logger()
 
@@ -211,3 +214,50 @@ class MMMUAdapter(VisionLanguageAdapter):
             content_list = self._parse_text_with_images(full_text, image_map)
 
         return content_list, answers_list
+
+
+@register_benchmark(
+    BenchmarkMeta(
+        name='mmmu_pruned',
+        pretty_name='MMMU Pruned',
+        tags=[Tags.MULTI_MODAL, Tags.KNOWLEDGE, Tags.QA],
+        description="""
+## Overview
+
+Pruned MMMU adapter for the Cerebras Task 2 multimodal probe.
+
+This adapter runs the same task and scoring path as `mmmu`, then applies a MMMU-specific visual-stress
+selection layer after normal validation loading. The default `visual_stress` strategy selects samples that stress
+image encoders through OCR density, small text, numeric/symbolic content, layout complexity, multi-image prompts,
+image-type stress, and CLIP diversity. Fixed-index and metadata coreset pruning remain available for debugging.
+
+## Evaluation Notes
+
+- Defaults to the same MMMU validation split as `mmmu`
+- Default visual probe size is `prune_k=120`
+- OCR and CLIP dependencies fail fast when `run_ocr=true` or `use_clip=true`
+- Selection is subject-aware because MMMU sample ids are reindexed independently inside each subject subset
+""",
+        dataset_id='AI-ModelScope/MMMU',
+        subset_list=SUBSET_LIST,
+        metric_list=['acc'],
+        eval_split='validation',
+        prompt_template=OPEN_PROMPT,
+        extra_params={
+            **PRUNING_EXTRA_PARAMS,
+            **MMMU_VISUAL_PRUNING_EXTRA_PARAMS,
+        },
+    )
+)
+class MMMUPrunedAdapter(PrunedBenchmarkMixin, MMMUAdapter):
+    """MMMU adapter registered as a visual-stress pruned benchmark."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._init_pruning()
+
+    def load(self):
+        if self.pruning_strategy == 'visual_stress':
+            test_dataset, fewshot_dataset = super().load()
+            return apply_mmmu_visual_pruning(test_dataset, self.extra_params, repeats=self.repeats), fewshot_dataset
+        return self._load_pruned_dataset()
